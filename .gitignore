@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build & Output Directories
+dist/
+**/dist/
+.next/
+**/.next/
+build/
+**/build/
+out/
+**/out/
+*.tsbuildinfo
+
+# Environment & Secrets (CRITICAL)
+.env
+**.env
+.env*.local
+**.env*.local
+*.pem
+*.key
+
+# Tauri Build Artifacts
+src-tauri/target/
+**/src-tauri/target/
+src-tauri/gen/
+**/src-tauri/gen/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
