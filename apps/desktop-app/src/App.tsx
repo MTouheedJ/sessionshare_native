@@ -112,14 +112,27 @@ export default function App() {
 
         setView({ status: "connecting", message: "Fetching session profile…" });
         const vault = await fetchVault(auth.accessToken);
-        const { app, policy, files } = vault.payload;
+        const { app, policy, files, objectArtifacts } = vault.payload;
 
-        setView({ status: "connecting", message: "Launching isolated sandbox…" });
+        const objectFiles = (objectArtifacts ?? []).map((a) => ({
+          path: a.path,
+          downloadUrl: a.downloadUrl ?? "",
+          key: a.key,
+          nonce: a.nonce,
+          sha256: a.sha256,
+        }));
+
+        setView({
+          status: "connecting",
+          message:
+            objectFiles.length > 0 ? "Downloading application…" : "Launching isolated sandbox…",
+        });
         const sandbox = await startSandbox({
           tokenId: auth.tokenId,
           executable: app.executable,
           args: app.args,
           files,
+          objectFiles,
           captureProtection: policy.captureProtection,
         });
 

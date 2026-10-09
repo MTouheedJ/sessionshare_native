@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:3000 ws://localhost:3000 http://localhost:3001; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' https://obsessive-fruit-glimmer.ngrok-free.dev wss://obsessive-fruit-glimmer.ngrok-free.dev http://localhost:3000 ws://localhost:3000 http://localhost:3001; img-src 'self' data-; style-src 'self' 'unsafe-inline'"
     }
   },
   "plugins": {

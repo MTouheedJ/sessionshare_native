@@ -10,7 +10,8 @@ import type { AppConfig } from './config/env';
 import { CorsIoAdapter } from './modules/realtime/cors-io.adapter';
 
 const VAULT_UPLOAD_PATH = '/api/v1/owner/vault/upload';
-const VAULT_BODY_LIMIT = '30mb';
+// Large enough to carry a bundled portable app binary (zero-install model).
+const VAULT_BODY_LIMIT = process.env.VAULT_BODY_LIMIT ?? '256mb';
 const DEFAULT_BODY_LIMIT = '100kb';
 
 async function bootstrap(): Promise<void> {
@@ -37,7 +38,11 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: [...config.desktopOrigins, ...config.dashboardOrigins],
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'ngrok-skip-browser-warning',
+    ],
     maxAge: 86_400,
   });
   app.useWebSocketAdapter(

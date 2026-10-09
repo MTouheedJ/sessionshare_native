@@ -12,7 +12,8 @@ import {
   DesktopAuthGuard,
 } from '../auth/guards/desktop-auth.guard';
 import type { DesktopIdentity } from '../auth/interfaces/jwt-payload.interface';
-import { UploadVaultDto } from './dto/vault-payload.dto';
+import type { SignedUpload } from '../storage/storage.service';
+import { PresignDownloadDto, UploadVaultDto } from './dto/vault-payload.dto';
 import {
   VaultFetchResponse,
   VaultMetadata,
@@ -39,5 +40,24 @@ export class VaultController {
     @CurrentDesktop() identity: DesktopIdentity,
   ): Promise<VaultFetchResponse> {
     return this.vaultService.fetch(identity);
+  }
+
+  /** Owner-only: get a signed URL to upload one large encrypted artifact directly to storage. */
+  @Post('artifacts/presign')
+  @HttpCode(HttpStatus.OK)
+  presignUpload(
+    @CurrentDesktop() identity: DesktopIdentity,
+  ): Promise<SignedUpload> {
+    return this.vaultService.presignUpload(identity);
+  }
+
+  /** Signed URL to download an artifact belonging to this identity's owner. */
+  @Post('artifacts/presign-download')
+  @HttpCode(HttpStatus.OK)
+  presignDownload(
+    @CurrentDesktop() identity: DesktopIdentity,
+    @Body() dto: PresignDownloadDto,
+  ): Promise<{ url: string }> {
+    return this.vaultService.presignDownload(identity, dto.objectKey);
   }
 }

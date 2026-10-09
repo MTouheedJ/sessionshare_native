@@ -1,5 +1,10 @@
 import { API_BASE_URL } from "./config";
-import type { ValidateTokenResponse, VaultFetchResponse, VaultPayload } from "./types";
+import type {
+  SignedUpload,
+  ValidateTokenResponse,
+  VaultFetchResponse,
+  VaultPayload,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -28,6 +33,8 @@ async function call<T>(path: string, init: RequestInit & { token?: string } = {}
       headers: {
         ...(rest.body ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        // Skip ngrok's free-tier browser-warning interstitial for API calls.
+        "ngrok-skip-browser-warning": "true",
         ...rest.headers,
       },
     });
@@ -69,5 +76,13 @@ export function uploadVault(
     method: "POST",
     token: accessToken,
     body: JSON.stringify({ payload }),
+  });
+}
+
+/** Owner-only: gets a signed URL to upload one large artifact directly to storage. */
+export function presignArtifactUpload(accessToken: string): Promise<SignedUpload> {
+  return call<SignedUpload>("/owner/vault/artifacts/presign", {
+    method: "POST",
+    token: accessToken,
   });
 }

@@ -26,11 +26,34 @@ export interface VaultFile {
   data: string;
 }
 
+/** Large artifact stored (encrypted) in object storage. */
+export interface VaultObjectArtifact {
+  path: string;
+  objectKey: string;
+  /** base64 AES-256 key */
+  key: string;
+  /** base64 nonce */
+  nonce: string;
+  /** hex SHA-256 of plaintext */
+  sha256: string;
+  size: number;
+  /** Ephemeral signed URL, present only on fetch responses. */
+  downloadUrl?: string;
+}
+
 export interface VaultPayload {
   version: 1;
   app: VaultApp;
   policy: VaultPolicy;
   files: VaultFile[];
+  objectArtifacts?: VaultObjectArtifact[];
+}
+
+export interface SignedUpload {
+  objectKey: string;
+  uploadUrl: string;
+  method: "PUT";
+  expiresIn: number;
 }
 
 export interface VaultFetchResponse {

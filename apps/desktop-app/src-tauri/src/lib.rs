@@ -1,6 +1,7 @@
 //! SessionShare desktop client: native integration for HWID, sandboxed target
 //! execution, window hardening, and the `sessionshare://` deep link.
 
+mod artifact;
 mod hwid;
 mod sandbox;
 mod window_control;
@@ -32,6 +33,17 @@ struct SeedFileArg {
     data: String,
 }
 
+/// A large artifact stored in object storage: downloaded from a signed URL,
+/// integrity-checked, and decrypted into the sandbox at redemption time.
+#[derive(Deserialize)]
+struct ObjectFileArg {
+    path: String,
+    download_url: String,
+    key: String,
+    nonce: String,
+    sha256: String,
+}
+
 #[derive(Deserialize)]
 struct StartSandboxArgs {
     token_id: String,
@@ -39,12 +51,84 @@ struct StartSandboxArgs {
     args: Vec<String>,
     files: Vec<SeedFileArg>,
     #[serde(default)]
+    object_files: Vec<ObjectFileArg>,
+    #[serde(default)]
     capture_protection: bool,
+}
+
+/// Owner side: encrypt a file locally and upload the ciphertext to a signed
+/// storage URL. Returns the key/nonce/checksum to store in the vault metadata.
+#[tauri::command]
+async fn upload_artifact(
+    file_path: String,
+    upload_url: String,
+) -> Result<artifact::ArtifactMeta, String> {
+    artifact::encrypt_and_upload(&file_path, &upload_url).await
 }
 
 #[tauri::command]
 fn get_hwid() -> String {
     hwid::compute()
+}
+
+#[derive(serde::Serialize)]
+struct FileBlob {
+    /// File name only (no directory), used as the bundled name inside the sandbox.
+    name: String,
+    /// base64-encoded file contents.
+    data: String,
+    size: u64,
+}
+
+#[derive(serde::Serialize)]
+struct FileStat {
+    path: String,
+    name: String,
+    size: u64,
+}
+
+/// Returns file names and sizes without reading contents, so the owner UI can
+/// decide inline vs object-storage per file before doing heavy work.
+#[tauri::command]
+fn stat_files(paths: Vec<String>) -> Result<Vec<FileStat>, String> {
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let p = std::path::Path::new(&path);
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("invalid file name: {path}"))?
+            .to_string();
+        let size = std::fs::metadata(&path)
+            .map_err(|e| format!("stat {path}: {e}"))?
+            .len();
+        out.push(FileStat { path, name, size });
+    }
+    Ok(out)
+}
+
+/// Reads owner-selected files and returns them base64-encoded for bundling into
+/// the vault payload (zero-install packaging). Used only on the owner host side.
+#[tauri::command]
+fn read_files_b64(paths: Vec<String>) -> Result<Vec<FileBlob>, String> {
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let p = std::path::Path::new(&path);
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("invalid file name: {path}"))?
+            .to_string();
+        let bytes = std::fs::read(&path).map_err(|e| format!("read {path}: {e}"))?;
+        let size = bytes.len() as u64;
+        out.push(FileBlob {
+            name,
+            data: engine.encode(&bytes),
+            size,
+        });
+    }
+    Ok(out)
 }
 
 /// Returns and clears the deep link captured at first launch, if any.
@@ -56,7 +140,7 @@ fn take_pending_deep_link(state: tauri::State<'_, AppState>) -> Option<String> {
 /// Creates the isolated sandbox, seeds vault files, and launches the target app
 /// bound to the sandbox directory. Enables the close guard on success.
 #[tauri::command]
-fn start_sandbox(
+async fn start_sandbox(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     args: StartSandboxArgs,
@@ -72,12 +156,28 @@ fn start_sandbox(
             data,
         });
     }
-    let files_written = seed.len();
 
     let mut sandbox = Sandbox::create(&args.token_id, &seed)?;
-    let spawn_args = sandbox.expand_args(&args.args);
 
-    let child = Command::new(&args.executable)
+    // Pull large artifacts from object storage, verify, decrypt, and extract them.
+    for obj in &args.object_files {
+        let bytes = artifact::download_and_decrypt(
+            &obj.download_url,
+            &obj.key,
+            &obj.nonce,
+            &obj.sha256,
+        )
+        .await
+        .map_err(|e| format!("artifact {}: {e}", obj.path))?;
+        sandbox.write_file(&obj.path, &bytes)?;
+    }
+    let files_written = args.files.len() + args.object_files.len();
+
+    let spawn_args = sandbox.expand_args(&args.args);
+    // Absolute => installed app; relative => bundled binary extracted into the sandbox.
+    let executable = sandbox.resolve_executable(&args.executable)?;
+
+    let child = Command::new(&executable)
         .args(&spawn_args)
         .current_dir(&sandbox.dir)
         .spawn()
@@ -154,9 +254,13 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_hwid,
+            stat_files,
+            read_files_b64,
+            upload_artifact,
             take_pending_deep_link,
             start_sandbox,
             set_capture_protection,

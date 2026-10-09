@@ -9,6 +9,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { TokensModule } from './modules/tokens/tokens.module';
 import { VaultModule } from './modules/vault/vault.module';
+import { StorageModule } from './modules/storage/storage.module';
 import { RedisModule } from './redis/redis.module';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
@@ -25,6 +26,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AppConfigModule,
     DatabaseModule,
     RedisModule,
+    StorageModule,
     AuthModule,
     RealtimeModule,
     TokensModule,

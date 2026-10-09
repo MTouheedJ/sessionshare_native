@@ -23,6 +23,7 @@ import {
 } from '../../database/entities';
 import type { DesktopIdentity } from '../auth/interfaces/jwt-payload.interface';
 import { TokenStatusService } from '../realtime/token-status.service';
+import { SignedUpload, StorageService } from '../storage/storage.service';
 import type { VaultPayloadDto } from './dto/vault-payload.dto';
 
 const FORMAT_PREFIX = 'v1:';
@@ -49,8 +50,31 @@ export class VaultService {
     @InjectRepository(SessionLog)
     private readonly sessions: Repository<SessionLog>,
     private readonly tokenStatus: TokenStatusService,
+    private readonly storage: StorageService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
+
+  /** Owner-only: allocates a signed URL to upload one large (encrypted) artifact. */
+  async presignUpload(identity: DesktopIdentity): Promise<SignedUpload> {
+    if (identity.tokenType !== TokenType.OWNER) {
+      throw new ForbiddenException('Only owner tokens can upload artifacts');
+    }
+    await this.assertTokenActive(identity);
+    return this.storage.createSignedUpload(identity.ownerId);
+  }
+
+  /** Signed URL to download an artifact that belongs to this identity's owner. */
+  async presignDownload(
+    identity: DesktopIdentity,
+    objectKey: string,
+  ): Promise<{ url: string }> {
+    await this.assertTokenActive(identity);
+    // An object key is namespaced `<ownerId>/<uuid>`; callers may only read their owner's objects.
+    if (!objectKey.startsWith(`${identity.ownerId}/`)) {
+      throw new ForbiddenException('Artifact does not belong to this owner');
+    }
+    return { url: await this.storage.createSignedDownload(objectKey) };
+  }
 
   async upload(
     identity: DesktopIdentity,
@@ -60,6 +84,9 @@ export class VaultService {
       throw new ForbiddenException('Only owner tokens can upload the vault');
     }
     await this.assertTokenActive(identity);
+
+    // Collect the previous publish's object keys so we can delete them after replacing.
+    const staleKeys = await this.existingObjectKeys(identity.ownerId);
 
     const plaintext = Buffer.from(JSON.stringify(payload), 'utf8');
     const checksum = createHash('sha256').update(plaintext).digest('hex');
@@ -74,6 +101,8 @@ export class VaultService {
       },
       { conflictPaths: ['ownerId'] },
     );
+    // Best-effort: remove orphaned artifacts from the previous publish.
+    await this.storage.deleteObjects(staleKeys);
     return { checksum, updatedAt: new Date(), sizeBytes: plaintext.length };
   }
 
@@ -103,11 +132,33 @@ export class VaultService {
       );
     }
     const plaintext = this.decrypt(vault.encryptedPayload, identity.ownerId);
-    return {
-      payload: JSON.parse(plaintext.toString('utf8')) as VaultPayloadDto,
-      checksum: vault.checksum,
-      updatedAt: vault.updatedAt,
-    };
+    const payload = JSON.parse(plaintext.toString('utf8')) as VaultPayloadDto;
+    await this.attachDownloadUrls(payload);
+    return { payload, checksum: vault.checksum, updatedAt: vault.updatedAt };
+  }
+
+  /** Object keys referenced by the owner's current vault (for cleanup on replace). */
+  private async existingObjectKeys(ownerId: string): Promise<string[]> {
+    const vault = await this.vaults.findOne({ where: { ownerId } });
+    if (!vault) return [];
+    try {
+      const prev = JSON.parse(
+        this.decrypt(vault.encryptedPayload, ownerId).toString('utf8'),
+      ) as VaultPayloadDto;
+      return (prev.objectArtifacts ?? []).map((a) => a.objectKey);
+    } catch {
+      return [];
+    }
+  }
+
+  /** Mints a fresh signed download URL for each object-backed artifact. */
+  private async attachDownloadUrls(payload: VaultPayloadDto): Promise<void> {
+    const artifacts = payload.objectArtifacts ?? [];
+    for (const artifact of artifacts) {
+      artifact.downloadUrl = await this.storage.createSignedDownload(
+        artifact.objectKey,
+      );
+    }
   }
 
   private async assertTokenActive(identity: DesktopIdentity): Promise<void> {

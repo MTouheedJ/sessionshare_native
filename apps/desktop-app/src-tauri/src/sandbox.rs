@@ -83,10 +83,41 @@ impl Sandbox {
         })
     }
 
+    /// Writes one file into the sandbox at a safe relative path (used for
+    /// object-backed artifacts decrypted at redemption time).
+    pub fn write_file(&self, rel_path: &str, data: &[u8]) -> Result<(), String> {
+        let target = safe_join(&self.dir, rel_path)
+            .ok_or_else(|| format!("unsafe sandbox path: {rel_path}"))?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+        }
+        fs::write(&target, data).map_err(|e| format!("write {rel_path}: {e}"))
+    }
+
     /// Replaces `{sandbox}` in each argument with the sandbox directory path.
     pub fn expand_args(&self, args: &[String]) -> Vec<String> {
         let dir = self.dir.to_string_lossy().to_string();
         args.iter().map(|a| a.replace("{sandbox}", &dir)).collect()
+    }
+
+    /// Resolves the executable to an absolute path. Absolute inputs (apps already
+    /// installed on the client) are used as-is; a relative input is resolved
+    /// inside the sandbox (zero-install bundled binary), rejecting `..` traversal.
+    ///
+    /// Note: a relative program path MUST be made absolute here — Windows
+    /// CreateProcess resolves a relative program name against the *parent's* cwd,
+    /// not the child's `current_dir`, so `current_dir(sandbox)` is not enough.
+    pub fn resolve_executable(&self, exe: &str) -> Result<PathBuf, String> {
+        let candidate = Path::new(exe);
+        if candidate.is_absolute() {
+            return Ok(candidate.to_path_buf());
+        }
+        let resolved =
+            safe_join(&self.dir, exe).ok_or_else(|| format!("unsafe executable path: {exe}"))?;
+        if !resolved.exists() {
+            return Err(format!("bundled executable not found in sandbox: {exe}"));
+        }
+        Ok(resolved)
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -207,6 +238,34 @@ mod tests {
         let dir = sb.dir.clone();
         sb.teardown();
         assert!(!dir.exists(), "sandbox dir should be shredded");
+    }
+
+    #[test]
+    fn resolve_executable_handles_absolute_relative_and_traversal() {
+        let token = format!("exetest_{}", std::process::id());
+        let files = vec![SeedFile {
+            rel_path: "bin/app.exe".into(),
+            data: b"MZ".to_vec(),
+        }];
+        let mut sb = Sandbox::create(&token, &files).unwrap();
+
+        // Relative bundled path resolves inside the sandbox.
+        let resolved = sb.resolve_executable("bin/app.exe").unwrap();
+        assert!(resolved.starts_with(&sb.dir));
+        assert!(resolved.ends_with("app.exe"));
+
+        // Absolute path is returned unchanged (installed-app case).
+        #[cfg(windows)]
+        {
+            let abs = r"C:\Windows\System32\notepad.exe";
+            assert_eq!(sb.resolve_executable(abs).unwrap().to_string_lossy(), abs);
+        }
+
+        // Traversal and missing bundled files are rejected.
+        assert!(sb.resolve_executable("../evil.exe").is_err());
+        assert!(sb.resolve_executable("bin/missing.exe").is_err());
+
+        sb.teardown();
     }
 
     #[test]

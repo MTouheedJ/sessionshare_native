@@ -26,6 +26,20 @@ export interface AppConfig {
     readonly desktopExpiresInSeconds: number;
     readonly wsTicketExpiresInSeconds: number;
   };
+  /** Supabase Storage for large (object-backed) vault artifacts. */
+  readonly storage: {
+    /** True only when both the URL and service key are configured. */
+    readonly enabled: boolean;
+    /** e.g. https://<project>.supabase.co (no trailing slash). */
+    readonly supabaseUrl: string;
+    /** Service-role key (server-only; never sent to clients). */
+    readonly serviceRoleKey: string;
+    readonly bucket: string;
+    /** Files at or below this size are inlined in the vault instead of object storage. */
+    readonly inlineMaxBytes: number;
+    /** Lifetime of signed upload/download URLs. */
+    readonly signedUrlTtlSeconds: number;
+  };
 }
 
 function required(key: string): string {
@@ -99,6 +113,16 @@ export function loadConfig(): AppConfig {
       expiresInSeconds: toInt('JWT_EXPIRES_IN_SECONDS', 3600),
       desktopExpiresInSeconds: toInt('JWT_DESKTOP_EXPIRES_IN_SECONDS', 900),
       wsTicketExpiresInSeconds: toInt('JWT_WS_TICKET_EXPIRES_IN_SECONDS', 60),
+    },
+    storage: {
+      enabled:
+        optional('SUPABASE_URL', '') !== '' &&
+        optional('SUPABASE_SERVICE_ROLE_KEY', '') !== '',
+      supabaseUrl: optional('SUPABASE_URL', '').replace(/\/$/, ''),
+      serviceRoleKey: optional('SUPABASE_SERVICE_ROLE_KEY', ''),
+      bucket: optional('SUPABASE_STORAGE_BUCKET', 'vault-artifacts'),
+      inlineMaxBytes: toInt('VAULT_INLINE_MAX_BYTES', 5 * 1024 * 1024),
+      signedUrlTtlSeconds: toInt('VAULT_SIGNED_URL_TTL_SECONDS', 600),
     },
   };
 }
