@@ -120,6 +120,7 @@ export default function App() {
           key: a.key,
           nonce: a.nonce,
           sha256: a.sha256,
+          archive: a.archive ?? false,
         }));
 
         setView({

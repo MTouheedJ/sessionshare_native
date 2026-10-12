@@ -67,11 +67,21 @@ export class VaultFileDto {
 
 /** A large artifact stored in object storage (ciphertext). Carries the client-held key. */
 export class VaultObjectArtifactDto {
+  /**
+   * When `archive` is false (default) this is the sandbox-relative file path the
+   * decrypted bytes are written to. When `archive` is true it is the sandbox-
+   * relative directory the decrypted ZIP is extracted into (preserving its tree).
+   */
   @Matches(SAFE_RELATIVE_PATH, {
     message: 'objectArtifacts.path must be a safe relative path',
   })
   @MaxLength(512)
   path: string;
+
+  /** True if the object is a ZIP archive to extract (folder-preserving bundle). */
+  @IsOptional()
+  @IsBoolean()
+  archive?: boolean;
 
   @IsString()
   @MaxLength(200)

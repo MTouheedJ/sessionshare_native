@@ -94,6 +94,44 @@ impl Sandbox {
         fs::write(&target, data).map_err(|e| format!("write {rel_path}: {e}"))
     }
 
+    /// Extracts a decrypted ZIP archive into a safe relative directory inside the
+    /// sandbox, preserving its folder tree. Every entry path is re-validated
+    /// (zip-slip safe): the zip crate's `enclosed_name` plus `safe_join`. Returns
+    /// the number of files written. Used for folder-preserving app bundles.
+    pub fn extract_zip(&self, rel_dir: &str, data: &[u8]) -> Result<usize, String> {
+        let base = safe_join(&self.dir, rel_dir)
+            .ok_or_else(|| format!("unsafe archive dir: {rel_dir}"))?;
+        let reader = std::io::Cursor::new(data);
+        let mut archive =
+            zip::ZipArchive::new(reader).map_err(|e| format!("open archive: {e}"))?;
+        let mut written = 0usize;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("archive entry {i}: {e}"))?;
+            // `enclosed_name` returns None for unsafe (absolute / traversing) names.
+            let rel = entry
+                .enclosed_name()
+                .ok_or_else(|| format!("unsafe archive entry: {}", entry.name()))?;
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            let target = safe_join(&base, &rel_str)
+                .ok_or_else(|| format!("unsafe archive entry: {rel_str}"))?;
+            if entry.is_dir() {
+                fs::create_dir_all(&target).map_err(|e| format!("create dir: {e}"))?;
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("create dir: {e}"))?;
+            }
+            let mut out =
+                fs::File::create(&target).map_err(|e| format!("write {rel_str}: {e}"))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("extract {rel_str}: {e}"))?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
     /// Replaces `{sandbox}` in each argument with the sandbox directory path.
     pub fn expand_args(&self, args: &[String]) -> Vec<String> {
         let dir = self.dir.to_string_lossy().to_string();
@@ -266,6 +304,34 @@ mod tests {
         assert!(sb.resolve_executable("bin/missing.exe").is_err());
 
         sb.teardown();
+    }
+
+    #[test]
+    fn extract_zip_preserves_folder_tree() {
+        // Build a source tree (top-level exe + a subfolder), zip it, extract it,
+        // and confirm the folder structure survives the round trip.
+        let pid = std::process::id();
+        let src = std::env::temp_dir().join(format!("ss_ziptest_src_{pid}"));
+        let _ = fs::remove_dir_all(&src);
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("app.exe"), b"MZmain").unwrap();
+        fs::write(src.join("sub").join("lib.dll"), b"libbytes").unwrap();
+
+        let archive = crate::artifact::zip_dir(src.to_str().unwrap()).unwrap();
+        assert_eq!(archive.entries.len(), 2);
+        let zip_bytes = fs::read(&archive.zip_path).unwrap();
+
+        let sb = Sandbox::create(&format!("ziptest_{pid}"), &[]).unwrap();
+        let written = sb.extract_zip("app", &zip_bytes).unwrap();
+        assert_eq!(written, 2);
+        assert_eq!(fs::read(sb.dir.join("app").join("app.exe")).unwrap(), b"MZmain");
+        assert_eq!(
+            fs::read(sb.dir.join("app").join("sub").join("lib.dll")).unwrap(),
+            b"libbytes"
+        );
+
+        let _ = fs::remove_file(&archive.zip_path);
+        let _ = fs::remove_dir_all(&src);
     }
 
     #[test]

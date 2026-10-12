@@ -430,6 +430,14 @@ body {
   color: var(--text-dim);
   line-height: 1.5;
 }
+.host__pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.host__pick .btn {
+  flex: 1 1 auto;
+}
 .host__policies {
   display: flex;
   flex-direction: column;
