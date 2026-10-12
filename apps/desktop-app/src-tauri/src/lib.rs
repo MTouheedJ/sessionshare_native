@@ -173,11 +173,20 @@ async fn start_sandbox(
     // Pull large artifacts from object storage, verify, decrypt, and extract them.
     let mut object_written = 0usize;
     for obj in &args.object_files {
+        // Report download progress to the frontend so large bundles aren't a black box.
+        let progress_window = window.clone();
+        let on_progress = move |downloaded: u64, total: u64| {
+            let _ = progress_window.emit(
+                "download-progress",
+                serde_json::json!({ "downloaded": downloaded, "total": total }),
+            );
+        };
         let bytes = artifact::download_and_decrypt(
             &obj.download_url,
             &obj.key,
             &obj.nonce,
             &obj.sha256,
+            &on_progress,
         )
         .await
         .map_err(|e| format!("artifact {}: {e}", obj.path))?;

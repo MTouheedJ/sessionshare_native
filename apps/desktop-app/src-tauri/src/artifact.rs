@@ -8,12 +8,14 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine;
+use futures_util::StreamExt;
 use rand::RngCore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -22,6 +24,7 @@ const NONCE_LEN: usize = 12;
 
 /// Result of zipping an app folder into a temporary archive.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchiveResult {
     /// Absolute path to the temp .zip on disk (uploaded, then deleted by the caller).
     pub zip_path: String,
@@ -151,7 +154,15 @@ pub async fn encrypt_and_upload(file_path: &str, upload_url: &str) -> Result<Art
         .await
         .map_err(|e| format!("upload request failed: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("upload failed: HTTP {}", resp.status()));
+        let status = resp.status();
+        let body: String = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(400)
+            .collect();
+        return Err(format!("upload failed: HTTP {status} {body}"));
     }
 
     Ok(ArtifactMeta {
@@ -162,12 +173,91 @@ pub async fn encrypt_and_upload(file_path: &str, upload_url: &str) -> Result<Art
     })
 }
 
-/// Downloads ciphertext from a signed URL, verifies integrity, and decrypts it.
-pub async fn download_and_decrypt(
+/// Downloads ciphertext over an unreliable network with resume-on-failure
+/// (HTTP Range) and retries, reporting progress as `(downloaded, total)` bytes.
+/// `total` is 0 until the server reports a content length.
+async fn download_resumable<F: Fn(u64, u64)>(
+    url: &str,
+    on_progress: &F,
+) -> Result<Vec<u8>, String> {
+    const MAX_ATTEMPTS: u32 = 6;
+    const EMIT_EVERY: u64 = 1_048_576; // report at most ~1 MB granularity
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut total: u64 = 0;
+    let mut last_emit: u64 = 0;
+    let mut last_err = String::new();
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        let resuming = !buf.is_empty();
+        let mut req = client.get(url);
+        if resuming {
+            req = req.header(reqwest::header::RANGE, format!("bytes={}-", buf.len()));
+        }
+
+        let step: Result<(), String> = async {
+            let resp = req.send().await.map_err(|e| format!("request: {e}"))?;
+            let status = resp.status();
+            if !status.is_success() {
+                return Err(format!("HTTP {status}"));
+            }
+            // If we asked to resume but the server ignored Range (200 not 206),
+            // it's sending the whole object again — restart from scratch.
+            if resuming && status != reqwest::StatusCode::PARTIAL_CONTENT {
+                buf.clear();
+                total = 0;
+                last_emit = 0;
+            }
+            if total == 0 {
+                if let Some(len) = resp.content_length() {
+                    total = buf.len() as u64 + len;
+                }
+            }
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| format!("body: {e}"))?;
+                buf.extend_from_slice(&chunk);
+                let have = buf.len() as u64;
+                if have - last_emit >= EMIT_EVERY {
+                    last_emit = have;
+                    on_progress(have, total);
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        match step {
+            Ok(()) => {
+                on_progress(buf.len() as u64, total);
+                return Ok(buf);
+            }
+            Err(e) => {
+                last_err = e;
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    Err(format!(
+        "download failed after {MAX_ATTEMPTS} attempts: {last_err}"
+    ))
+}
+
+/// Downloads ciphertext from a signed URL (resumable), verifies integrity, and
+/// decrypts it. `on_progress(downloaded, total)` is called as bytes arrive.
+pub async fn download_and_decrypt<F: Fn(u64, u64)>(
     download_url: &str,
     key_b64: &str,
     nonce_b64: &str,
     sha256_hex_expected: &str,
+    on_progress: &F,
 ) -> Result<Vec<u8>, String> {
     let key = b64()
         .decode(key_b64)
@@ -179,16 +269,7 @@ pub async fn download_and_decrypt(
         return Err("invalid key/nonce length".into());
     }
 
-    let resp = reqwest::get(download_url)
-        .await
-        .map_err(|e| format!("download request failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("download failed: HTTP {}", resp.status()));
-    }
-    let ciphertext = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("download body failed: {e}"))?;
+    let ciphertext = download_resumable(download_url, on_progress).await?;
 
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let plaintext = cipher

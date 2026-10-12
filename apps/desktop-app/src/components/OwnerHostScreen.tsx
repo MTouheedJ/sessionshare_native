@@ -210,7 +210,14 @@ export function OwnerHostScreen({ accessToken, onSignOut }: Props) {
       const result = await uploadVault(accessToken, payload);
       setPublished({ checksum: result.checksum });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      // Tauri `invoke` rejects with a plain string; API errors are Error instances.
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string" && err.length > 0
+            ? err
+            : "Upload failed";
+      setError(message);
     } finally {
       setBusy(false);
       setProgress(null);
