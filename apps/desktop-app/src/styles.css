@@ -263,6 +263,25 @@ body {
   gap: 16px;
   color: var(--text-dim);
 }
+.connecting__detail {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0;
+}
+.progress {
+  width: 260px;
+  height: 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress__bar {
+  height: 100%;
+  background: var(--accent, #6366f1);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
 
 /* ---------- user frame ---------- */
 .frame,
@@ -429,6 +448,14 @@ body {
   margin: 0;
   color: var(--text-dim);
   line-height: 1.5;
+}
+.host__pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.host__pick .btn {
+  flex: 1 1 auto;
 }
 .host__policies {
   display: flex;

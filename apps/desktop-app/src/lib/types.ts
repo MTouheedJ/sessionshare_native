@@ -29,6 +29,8 @@ export interface VaultFile {
 /** Large artifact stored (encrypted) in object storage. */
 export interface VaultObjectArtifact {
   path: string;
+  /** True if the object is a ZIP archive extracted into `path` (folder bundle). */
+  archive?: boolean;
   objectKey: string;
   /** base64 AES-256 key */
   key: string;

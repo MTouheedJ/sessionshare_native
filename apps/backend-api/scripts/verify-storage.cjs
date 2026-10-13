@@ -1,13 +1,13 @@
 /*
  * Phase-1 verification for object-storage bundling.
  *
- * Proves the full direct-to-storage round trip against YOUR real Supabase project:
+ * Proves the full direct-to-storage round trip against YOUR real Cloudflare R2 bucket:
  *   register owner -> owner token -> desktop JWT -> presign upload
- *   -> PUT bytes straight to Supabase Storage -> presign download -> GET -> compare.
+ *   -> PUT bytes straight to R2 -> presign download -> GET -> compare.
  *
  * Prereqs:
- *   1. Backend running with SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY set (see .env.example).
- *   2. A Storage bucket matching SUPABASE_STORAGE_BUCKET (default "vault-artifacts").
+ *   1. Backend running with R2_ACCOUNT_ID + R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY set (see .env.example).
+ *   2. An R2 bucket matching R2_BUCKET (default "vault-artifacts").
  *
  * Usage:
  *   node scripts/verify-storage.cjs [API_BASE_URL]
@@ -55,7 +55,7 @@ const check = (label, ok, extra = "") => {
     presign.status === 200 ? presign.body.objectKey : JSON.stringify(presign.body),
   );
   if (presign.status !== 200) {
-    console.log("\nHINT: 503 = SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set on the backend.");
+    console.log("\nHINT: 503 = R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY not set on the backend.");
     process.exit(1);
   }
   const { objectKey, uploadUrl, method } = presign.body;
@@ -68,7 +68,7 @@ const check = (label, ok, extra = "") => {
     headers: { "Content-Type": "application/octet-stream" },
     body: payload,
   });
-  check("direct upload to Supabase Storage", put.ok, `HTTP ${put.status}`);
+  check("direct upload to R2", put.ok, `HTTP ${put.status}`);
   if (!put.ok) {
     console.log("  response:", (await put.text()).slice(0, 300));
   }

@@ -41,6 +41,7 @@ export default function App() {
   const [paused, setPaused] = useState(false);
   const [linkState, setLinkState] = useState<LinkState>("live");
   const [userSession, setUserSession] = useState<UserSession | null>(null);
+  const [download, setDownload] = useState<{ downloaded: number; total: number } | null>(null);
 
   const socketRef = useRef<SessionSocket | null>(null);
   const versionRef = useRef<string>("0.1.0");
@@ -55,6 +56,7 @@ export default function App() {
     setPaused(false);
     setLinkState("live");
     setUserSession(null);
+    setDownload(null);
     await cleanupSandbox().catch(() => undefined);
   }, []);
 
@@ -99,6 +101,7 @@ export default function App() {
     async (token: string) => {
       setError(null);
       setBanner(null);
+      setDownload(null);
       setView({ status: "connecting", message: "Validating token…" });
       try {
         const hwid = await getHwid();
@@ -120,6 +123,7 @@ export default function App() {
           key: a.key,
           nonce: a.nonce,
           sha256: a.sha256,
+          archive: a.archive ?? false,
         }));
 
         setView({
@@ -177,6 +181,17 @@ export default function App() {
     return () => unlisteners.forEach((un) => un());
   }, [handleSubmit]);
 
+  // Live download progress for large (object-backed) bundles, emitted from Rust.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    void listen<{ downloaded: number; total: number }>("download-progress", (e) =>
+      setDownload(e.payload),
+    )
+      .then((fn) => (un = fn))
+      .catch(() => undefined);
+    return () => un?.();
+  }, []);
+
   const signOut = useCallback(() => void returnToLogin(null), [returnToLogin]);
 
   if (view.status === "login") {
@@ -196,10 +211,29 @@ export default function App() {
   }
 
   if (view.status === "connecting") {
+    const mb = (n: number) => (n / 1024 / 1024).toFixed(0);
+    const pct =
+      download && download.total > 0
+        ? Math.min(100, Math.round((download.downloaded / download.total) * 100))
+        : null;
     return (
       <div className="connecting">
         <Loader2 size={36} className="spin" />
         <p>{view.message}</p>
+        {download && (
+          <>
+            {pct !== null && (
+              <div className="progress">
+                <div className="progress__bar" style={{ width: `${pct}%` }} />
+              </div>
+            )}
+            <p className="connecting__detail">
+              {pct !== null
+                ? `${pct}% — ${mb(download.downloaded)} / ${mb(download.total)} MB`
+                : `${mb(download.downloaded)} MB downloaded`}
+            </p>
+          </>
+        )}
       </div>
     );
   }

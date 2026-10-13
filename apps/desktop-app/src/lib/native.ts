@@ -46,6 +46,29 @@ export async function pickFiles(): Promise<string[]> {
   return Array.isArray(selection) ? selection : [selection];
 }
 
+/** Opens a native folder picker (for multi-file apps with subfolders). */
+export async function pickFolder(): Promise<string | null> {
+  const selection = await open({
+    multiple: false,
+    directory: true,
+    title: "Select the application folder to bundle",
+  });
+  return typeof selection === "string" ? selection : null;
+}
+
+export interface ArchiveResult {
+  /** Temp .zip path on disk. */
+  zipPath: string;
+  size: number;
+  /** Relative file paths inside the archive (for choosing the main executable). */
+  entries: string[];
+}
+
+/** Zips an app folder (preserving subfolders) into a temp archive for upload. */
+export function zipFolder(srcDir: string): Promise<ArchiveResult> {
+  return invoke<ArchiveResult>("zip_folder", { srcDir });
+}
+
 /** Reads the selected files on the owner's machine and base64-encodes them. */
 export function readFilesB64(paths: string[]): Promise<FileBlob[]> {
   return invoke<FileBlob[]>("read_files_b64", { paths });
@@ -67,6 +90,8 @@ export interface ObjectFile {
   key: string;
   nonce: string;
   sha256: string;
+  /** True if `path` is a directory and the object is a ZIP to extract into it. */
+  archive?: boolean;
 }
 
 export interface StartSandboxArgs {
@@ -92,6 +117,7 @@ export function startSandbox(args: StartSandboxArgs): Promise<SandboxInfo> {
         key: o.key,
         nonce: o.nonce,
         sha256: o.sha256,
+        archive: o.archive ?? false,
       })),
       capture_protection: args.captureProtection,
     },

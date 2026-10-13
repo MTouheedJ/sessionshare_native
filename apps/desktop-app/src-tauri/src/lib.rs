@@ -42,6 +42,10 @@ struct ObjectFileArg {
     key: String,
     nonce: String,
     sha256: String,
+    /// When true, `path` is a directory and the decrypted bytes are a ZIP to
+    /// extract into it (folder-preserving bundle); otherwise `path` is a file.
+    #[serde(default)]
+    archive: bool,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +68,13 @@ async fn upload_artifact(
     upload_url: String,
 ) -> Result<artifact::ArtifactMeta, String> {
     artifact::encrypt_and_upload(&file_path, &upload_url).await
+}
+
+/// Owner side: zip an app folder (preserving its subfolders) into a temp archive
+/// so multi-file apps bundle as one object. Returns the zip path + entry list.
+#[tauri::command]
+fn zip_folder(src_dir: String) -> Result<artifact::ArchiveResult, String> {
+    artifact::zip_dir(&src_dir)
 }
 
 #[tauri::command]
@@ -160,18 +171,34 @@ async fn start_sandbox(
     let mut sandbox = Sandbox::create(&args.token_id, &seed)?;
 
     // Pull large artifacts from object storage, verify, decrypt, and extract them.
+    let mut object_written = 0usize;
     for obj in &args.object_files {
+        // Report download progress to the frontend so large bundles aren't a black box.
+        let progress_window = window.clone();
+        let on_progress = move |downloaded: u64, total: u64| {
+            let _ = progress_window.emit(
+                "download-progress",
+                serde_json::json!({ "downloaded": downloaded, "total": total }),
+            );
+        };
         let bytes = artifact::download_and_decrypt(
             &obj.download_url,
             &obj.key,
             &obj.nonce,
             &obj.sha256,
+            &on_progress,
         )
         .await
         .map_err(|e| format!("artifact {}: {e}", obj.path))?;
-        sandbox.write_file(&obj.path, &bytes)?;
+        if obj.archive {
+            // Folder bundle: unzip the tree into the sandbox directory.
+            object_written += sandbox.extract_zip(&obj.path, &bytes)?;
+        } else {
+            sandbox.write_file(&obj.path, &bytes)?;
+            object_written += 1;
+        }
     }
-    let files_written = args.files.len() + args.object_files.len();
+    let files_written = args.files.len() + object_written;
 
     let spawn_args = sandbox.expand_args(&args.args);
     // Absolute => installed app; relative => bundled binary extracted into the sandbox.
@@ -258,6 +285,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_hwid,
+            zip_folder,
             stat_files,
             read_files_b64,
             upload_artifact,
